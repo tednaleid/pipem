@@ -6,10 +6,10 @@ use std::cmp::max;
 use std::fmt::*;
 use crate::pipem::Fragment::{StaticValue, SingleField, FieldRange, UnboundedFieldRange};
 
-pub const DEFAULT_FIELD_SEPARATOR: &[u8] = b" ";
-pub const DEFAULT_FIELD_SEPARATOR_BYTE: &u8 = &b" "[0];
-pub const DEFAULT_RECORD_SEPARATOR: &[u8] = b"\n";
-pub const DEFAULT_RECORD_SEPARATOR_BYTE: u8 = b"\n"[0];
+pub const SPACE_BYTE: u8 = b" "[0];
+pub const COMMA_BYTE: u8 = b","[0];
+pub const NEWLINE_BYTE: u8 = b"\n"[0];
+pub const PIPE_BYTE: u8 = b"|"[0];
 
 #[derive(PartialEq, Debug)]
 struct FieldValues<'a> {
@@ -19,12 +19,12 @@ struct FieldValues<'a> {
 }
 
 impl FieldValues<'_> {
-    fn parse(raw_record: &[u8]) -> FieldValues {
+    fn parse(raw_record: &[u8], field_separator: u8) -> FieldValues {
         let mut offset: usize = 0;
         let mut delimiters: Vec<usize> = Vec::new();
 
         for value in raw_record {
-            if value == DEFAULT_FIELD_SEPARATOR_BYTE {
+            if value == &field_separator {
                 delimiters.push(offset);
             }
             offset += 1;
@@ -91,8 +91,8 @@ enum Fragment<'a> {
 
 #[derive(Debug)]
 pub struct OutputTemplate<'a> {
-    field_separator: &'a [u8],
-    record_separator: &'a [u8],
+    field_separator: u8,
+    record_separator: u8,
     raw_template: &'a str,
     fragments: Vec<Fragment<'a>>,
 }
@@ -107,12 +107,11 @@ impl PartialEq for OutputTemplate<'_> {
 }
 
 impl OutputTemplate<'_> {
-    // TODO should this parse be generic in some way? via FromStr trait? change to returning a Result?
-    pub fn parse(raw_template: &str) -> OutputTemplate {
+    pub fn parse(raw_template: &str, field_separator: u8, record_separator: u8) -> OutputTemplate {
         let fragments = OutputTemplate::extract_fragments(raw_template);
         OutputTemplate {
-            field_separator: DEFAULT_FIELD_SEPARATOR,
-            record_separator: DEFAULT_RECORD_SEPARATOR,
+            field_separator,
+            record_separator,
             raw_template,
             fragments,
         }
@@ -129,7 +128,7 @@ impl OutputTemplate<'_> {
 
             writer.write(&f.as_ref()).ok();
         });
-        writer.write(DEFAULT_RECORD_SEPARATOR)?;
+        writer.write(&[NEWLINE_BYTE])?;
 
         Ok(())
     }
@@ -205,9 +204,9 @@ impl OutputTemplate<'_> {
 }
 
 pub fn merge_input<R, W>(reader: R, writer: &mut W, template: OutputTemplate) -> io::Result<()> where R: BufRead, W: Write {
-    for line_result in reader.split(DEFAULT_RECORD_SEPARATOR_BYTE) {
+    for line_result in reader.split(template.record_separator) {
         let line = line_result?;
-        let values = FieldValues::parse(line.as_slice());
+        let values = FieldValues::parse(line.as_slice(), template.field_separator);
         template.write_merged(writer, values)?;
     }
     Ok(())
@@ -220,7 +219,7 @@ fn test_merge_single_field() {
     let cursor = io::Cursor::new(input);
 
     let mut out = Vec::new();
-    merge_input(cursor, &mut out, OutputTemplate::parse("single: $2")).unwrap();
+    merge_input(cursor, &mut out, OutputTemplate::parse("single: $2", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
     assert_eq!(out, b"single: second\n");
 }
 
@@ -230,7 +229,7 @@ fn test_merge_range() {
     let cursor = io::Cursor::new(input);
 
     let mut out = Vec::new();
-    merge_input(cursor, &mut out, OutputTemplate::parse("range: $1,3")).unwrap();
+    merge_input(cursor, &mut out, OutputTemplate::parse("range: $1,3", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
     assert_eq!(out, b"range: first second third\n");
 }
 
@@ -240,7 +239,7 @@ fn test_merge_unbounded() {
     let cursor = io::Cursor::new(input);
 
     let mut out = Vec::new();
-    merge_input(cursor, &mut out, OutputTemplate::parse("range: $4,")).unwrap();
+    merge_input(cursor, &mut out, OutputTemplate::parse("range: $4,", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
     assert_eq!(out, b"range: fourth fifth sixth\n");
 }
 
@@ -250,26 +249,42 @@ fn test_merge_all() {
     let cursor = io::Cursor::new(input);
 
     let mut out = Vec::new();
-    merge_input(cursor, &mut out, OutputTemplate::parse("all: $0")).unwrap();
+    merge_input(cursor, &mut out, OutputTemplate::parse("all: $0", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
     assert_eq!(out, b"all: first second third fourth\n");
 }
 
-//#[test]
-//fn test_alternate_delimiter() {
-//    let input: &[u8] = b"first,second,third,fourth,fifth,sixth\n";
-//    let cursor = io::Cursor::new(input);
-//
-//    let mut out = Vec::new();
-//    merge_input(cursor, &mut out, OutputTemplate::parse("single: $2"));
-//    assert_eq!(out, b"single: second\n");
-//}
+#[test]
+fn test_alternate_field_delimiter() {
+    let input: &[u8] = b"first,second,third,fourth,fifth,sixth\n";
+    let cursor = io::Cursor::new(input);
+
+    let mut out = Vec::new();
+    merge_input(
+        cursor,
+        &mut out,
+        OutputTemplate::parse("single: $2", COMMA_BYTE, NEWLINE_BYTE)).unwrap();
+    assert_eq!(out, b"single: second\n");
+}
+
+#[test]
+fn test_alternate_record_delimiter() {
+    let input: &[u8] = b"first,second,third|fourth,fifth,sixth";
+    let cursor = io::Cursor::new(input);
+
+    let mut out = Vec::new();
+    merge_input(
+        cursor,
+        &mut out,
+        OutputTemplate::parse("single: $2", COMMA_BYTE, PIPE_BYTE)).unwrap();
+    assert_eq!(out, b"single: second\nsingle: fifth\n");
+}
 
 
 #[test]
 fn test_equality() {
     let a = OutputTemplate {
-        field_separator: DEFAULT_FIELD_SEPARATOR,
-        record_separator: DEFAULT_RECORD_SEPARATOR,
+        field_separator: SPACE_BYTE,
+        record_separator: NEWLINE_BYTE,
         raw_template: "baz",
         fragments: vec![
             StaticValue(b""),
@@ -280,8 +295,8 @@ fn test_equality() {
     };
 
     let b = OutputTemplate {
-        field_separator: DEFAULT_FIELD_SEPARATOR,
-        record_separator: DEFAULT_RECORD_SEPARATOR,
+        field_separator: SPACE_BYTE,
+        record_separator: NEWLINE_BYTE,
         raw_template: "baz",
         fragments: vec![
             StaticValue(b""),
@@ -354,7 +369,7 @@ fn test_extract_fragments() {
 
 #[test]
 fn test_field_value_extract() {
-    let fv = FieldValues::parse(b"one two three");
+    let fv = FieldValues::parse(b"one two three", SPACE_BYTE);
 
     assert_eq!(fv.single(1), b"one");
     assert_eq!(fv.single(2), b"two");
