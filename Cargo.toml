@@ -1,0 +1,12 @@
+[package]
+name = "pipem"
+version = "0.1.0"
+authors = ["Ted Naleid <contact@naleid.com>"]
+edition = "2018"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+lazy_static = "1.3.0"
+structopt = "0.2.10"
+regex = "1"
