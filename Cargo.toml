@@ -3,8 +3,14 @@ name = "pipem"
 version = "0.1.0"
 authors = ["Ted Naleid <contact@naleid.com>"]
 edition = "2018"
+license = "MIT"
+description = "An app/lib that can merge fields into a template via pipes/streams"
+readme = "README.md"
+homepage = "https://github.com/tednaleid/pipem"
+repository = "https://github.com/tednaleid/pipem"
+keywords = ["cli", "merge"]
+categories = ["command-line-utilities"]
 
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 lazy_static = "1.3.0"

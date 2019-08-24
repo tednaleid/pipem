@@ -1,26 +1,21 @@
-#[macro_use]
-use std::error::Error;
+use std::io::{self, Write};
+use std::io::BufRead;
 
-use std::io::{self, stdout, Write};
-use std::io::{BufRead, BufReader};
-use structopt::StructOpt;
-
-use regex::{Match, Regex};
-use std::cmp::{max, min};
+use regex::Regex;
+use std::cmp::max;
 use std::fmt::*;
-use std::borrow::Borrow;
 use crate::pipem::Fragment::{StaticValue, SingleField, FieldRange, UnboundedFieldRange};
 
 pub const DEFAULT_FIELD_SEPARATOR: &[u8] = b" ";
-pub const DEFAULT_FIELD_SEPARATOR_U8: &u8 = &b" "[0];
+pub const DEFAULT_FIELD_SEPARATOR_BYTE: &u8 = &b" "[0];
 pub const DEFAULT_RECORD_SEPARATOR: &[u8] = b"\n";
+pub const DEFAULT_RECORD_SEPARATOR_BYTE: u8 = b"\n"[0];
 
 #[derive(PartialEq, Debug)]
 struct FieldValues<'a> {
     raw_record: &'a [u8],
     raw_len: usize,
     delimiter_indexes: Vec<usize>,
-    // TODO the start/end indexes/offsets of each field within raw_record
 }
 
 impl FieldValues<'_> {
@@ -29,7 +24,7 @@ impl FieldValues<'_> {
         let mut delimiters: Vec<usize> = Vec::new();
 
         for value in raw_record {
-            if value == DEFAULT_FIELD_SEPARATOR_U8 {
+            if value == DEFAULT_FIELD_SEPARATOR_BYTE {
                 delimiters.push(offset);
             }
             offset += 1;
@@ -132,9 +127,9 @@ impl OutputTemplate<'_> {
                 Fragment::FieldRange(start_field, end_field) => field_values.range(*start_field, *end_field)
             };
 
-            writer.write(&f.as_ref());
+            writer.write(&f.as_ref()).ok();
         });
-        writer.write(DEFAULT_RECORD_SEPARATOR);
+        writer.write(DEFAULT_RECORD_SEPARATOR)?;
 
         Ok(())
     }
@@ -210,13 +205,65 @@ impl OutputTemplate<'_> {
 }
 
 pub fn merge_input<R, W>(reader: R, writer: &mut W, template: OutputTemplate) -> io::Result<()> where R: BufRead, W: Write {
-    for line_result in reader.split(b'\n') {
+    for line_result in reader.split(DEFAULT_RECORD_SEPARATOR_BYTE) {
         let line = line_result?;
         let values = FieldValues::parse(line.as_slice());
-        template.write_merged(writer, values);
+        template.write_merged(writer, values)?;
     }
     Ok(())
 }
+
+
+#[test]
+fn test_merge_single_field() {
+    let input: &[u8] = b"first second third fourth fifth sixth\n";
+    let cursor = io::Cursor::new(input);
+
+    let mut out = Vec::new();
+    merge_input(cursor, &mut out, OutputTemplate::parse("single: $2")).unwrap();
+    assert_eq!(out, b"single: second\n");
+}
+
+#[test]
+fn test_merge_range() {
+    let input: &[u8] = b"first second third fourth fifth sixth\n";
+    let cursor = io::Cursor::new(input);
+
+    let mut out = Vec::new();
+    merge_input(cursor, &mut out, OutputTemplate::parse("range: $1,3")).unwrap();
+    assert_eq!(out, b"range: first second third\n");
+}
+
+#[test]
+fn test_merge_unbounded() {
+    let input: &[u8] = b"first second third fourth fifth sixth\n";
+    let cursor = io::Cursor::new(input);
+
+    let mut out = Vec::new();
+    merge_input(cursor, &mut out, OutputTemplate::parse("range: $4,")).unwrap();
+    assert_eq!(out, b"range: fourth fifth sixth\n");
+}
+
+#[test]
+fn test_merge_all() {
+    let input: &[u8] = b"first second third fourth\n";
+    let cursor = io::Cursor::new(input);
+
+    let mut out = Vec::new();
+    merge_input(cursor, &mut out, OutputTemplate::parse("all: $0")).unwrap();
+    assert_eq!(out, b"all: first second third fourth\n");
+}
+
+//#[test]
+//fn test_alternate_delimiter() {
+//    let input: &[u8] = b"first,second,third,fourth,fifth,sixth\n";
+//    let cursor = io::Cursor::new(input);
+//
+//    let mut out = Vec::new();
+//    merge_input(cursor, &mut out, OutputTemplate::parse("single: $2"));
+//    assert_eq!(out, b"single: second\n");
+//}
+
 
 #[test]
 fn test_equality() {
