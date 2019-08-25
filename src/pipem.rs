@@ -19,9 +19,9 @@ struct FieldValues<'a> {
 }
 
 impl FieldValues<'_> {
-    fn parse(raw_record: &[u8], field_separator: u8) -> FieldValues {
+    fn parse(raw_record: &[u8], field_separator: u8, expected_field_count: usize) -> FieldValues {
         let mut offset: usize = 0;
-        let mut delimiters: Vec<usize> = Vec::new();
+        let mut delimiters: Vec<usize> = Vec::with_capacity(expected_field_count);
 
         for value in raw_record {
             if value == &field_separator {
@@ -204,9 +204,12 @@ impl OutputTemplate<'_> {
 }
 
 pub fn merge_input<R, W>(reader: R, writer: &mut W, template: OutputTemplate) -> io::Result<()> where R: BufRead, W: Write {
+    // assume that most inputs have relatively similar field lengths per record
+    let mut last_field_count = 0;
     for line_result in reader.split(template.record_separator) {
         let line = line_result?;
-        let values = FieldValues::parse(line.as_slice(), template.field_separator);
+        let values = FieldValues::parse(line.as_slice(), template.field_separator, last_field_count);
+        last_field_count = values.delimiter_indexes.len();
         template.write_merged(writer, values)?;
     }
     Ok(())
@@ -369,7 +372,7 @@ fn test_extract_fragments() {
 
 #[test]
 fn test_field_value_extract() {
-    let fv = FieldValues::parse(b"one two three", SPACE_BYTE);
+    let fv = FieldValues::parse(b"one two three", SPACE_BYTE, 0);
 
     assert_eq!(fv.single(1), b"one");
     assert_eq!(fv.single(2), b"two");
