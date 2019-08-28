@@ -15,4 +15,5 @@ categories = ["command-line-utilities"]
 [dependencies]
 lazy_static = "1.3.0"
 structopt = "0.2.10"
+smallvec = "0.6.10"
 regex = "1"

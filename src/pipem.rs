@@ -4,6 +4,7 @@ use std::io::BufRead;
 use regex::Regex;
 use std::cmp::max;
 use std::fmt::*;
+use smallvec::SmallVec;
 use crate::pipem::Fragment::{StaticValue, SingleField, FieldRange, UnboundedFieldRange};
 
 pub const SPACE_BYTE: u8 = b" "[0];
@@ -11,17 +12,23 @@ pub const COMMA_BYTE: u8 = b","[0];
 pub const NEWLINE_BYTE: u8 = b"\n"[0];
 pub const PIPE_BYTE: u8 = b"|"[0];
 
+// TODO create an input parser sealed class that has a parse method on it that returns a FieldValues
+// and will allow for various kinds of parsing
+// we currently have single byte delimiters with duplicates being treated as extra fields
+// alternate would be to group consecutive values
+// another alternative would let a regexp be applied for splitting
+
 #[derive(PartialEq, Debug)]
 struct FieldValues<'a> {
     raw_record: &'a [u8],
     raw_len: usize,
-    delimiter_indexes: Vec<usize>,
+    delimiter_indexes: SmallVec<[usize; 32]>,
 }
 
 impl FieldValues<'_> {
     fn parse(raw_record: &[u8], field_separator: u8, expected_field_count: usize) -> FieldValues {
         let mut offset: usize = 0;
-        let mut delimiters: Vec<usize> = Vec::with_capacity(expected_field_count);
+        let mut delimiters: SmallVec<[usize; 32]> = SmallVec::with_capacity(expected_field_count);
 
         for value in raw_record {
             if value == &field_separator {
