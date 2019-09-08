@@ -88,11 +88,11 @@ impl FieldValues<'_> {
 enum Fragment<'a> {
     // "a value" - static string
     StaticValue(&'a [u8]),
-    // $2 - field 2
+    // {2} - field 2
     SingleField(usize),
-    // $2,4 - fields 2, 3, 4
+    // {2,4} - fields 2, 3, 4
     FieldRange(usize, usize),
-    // $2,4 - fields 2, 3, 4
+    // {2,} - fields 2, 3, 4, ....
     UnboundedFieldRange(usize),
 }
 
@@ -141,12 +141,22 @@ impl OutputTemplate<'_> {
     }
 
     fn extract_fragments(raw_template: &str) -> Vec<Fragment> {
-        let field_placeholder_regex =
-            Regex::new(r"\$(?P<start_field>\d+)(?:(?:,(?P<end_field>\d+))|(?P<unbounded>,))?")
-                .unwrap();
+        let field_placeholder_regex = Regex::new(r"(?x)
+            (?P<implicit>\{\})         # a field placeholder without explicit field, ex: {}
+            |                          # or
+            (?:\{                      # we will have something inside our brackets, {3} or {3,5} or {3,}
+                (?P<start_field>\d+)   # an explicit start field is expected ex: {3} for 3rd field
+                (?:
+                  (?:,(?P<end_field>\d+))  # optionally, we have an explicit end field, ex: {3,5}
+                  |
+                  (?P<unbounded>,)         # or optionally, there is no explicit end field so it is unbounded, ex: {3,}
+                )?
+            \})
+        ").unwrap();
 
         let mut fragments = Vec::new();
         let mut last_field_end = 0;
+        let mut at_implicit_field = 1;
         let template_len = raw_template.len();
 
         while last_field_end < template_len {
@@ -164,34 +174,41 @@ impl OutputTemplate<'_> {
                         .captures(&raw_template[field_start..field_end])
                         .unwrap();
 
-                    let start_cap_match = caps.name("start_field").unwrap();
+                    if caps.name("implicit").is_some() {
+                        // field placeholder: {} - field is implicit based on positioning, starts at 1 and moves up
+                        //   so "{} {} {}" would be the space delimited first, second, and third fields
+                        fragments.push(Fragment::SingleField(at_implicit_field));
+                        at_implicit_field += 1;
+                    } else {
+                        let start_cap_match = caps.name("start_field").unwrap();
 
-                    let start = *&raw_template[(field_start + start_cap_match.start())
-                        ..(field_start + start_cap_match.end())]
-                        .parse::<usize>()
-                        .unwrap();
-
-                    if caps.name("end_field").is_some() {
-                        // field placeholder: $2,4 - fields 2-4
-                        let end_cap_match = caps.name("end_field").unwrap();
-                        let end_field = *&raw_template[(field_start + end_cap_match.start())
-                            ..(field_start + end_cap_match.end())]
+                        let start = *&raw_template[(field_start + start_cap_match.start())
+                            ..(field_start + start_cap_match.end())]
                             .parse::<usize>()
                             .unwrap();
-                        let natural_start = max(start, 1); // 1 based
 
-                        assert!(end_field > natural_start);
+                        if caps.name("end_field").is_some() {
+                            // field placeholder: $2,4 - fields 2-4
+                            let end_cap_match = caps.name("end_field").unwrap();
+                            let end_field = *&raw_template[(field_start + end_cap_match.start())
+                                ..(field_start + end_cap_match.end())]
+                                .parse::<usize>()
+                                .unwrap();
+                            let natural_start = max(start, 1); // 1 based
 
-                        fragments.push(Fragment::FieldRange(natural_start, end_field));
-                    } else if caps.name("unbounded").is_some() {
-                        // field placeholder $2, - all fields 2 and after
-                        fragments.push(Fragment::UnboundedFieldRange(start));
-                    } else if start == 0 {
-                        // field placeholder: $0 - all fields
-                        fragments.push(Fragment::UnboundedFieldRange(1));
-                    } else {
-                        // field placeholder: $2 - just field 2
-                        fragments.push(Fragment::SingleField(start));
+                            assert!(end_field > natural_start);
+
+                            fragments.push(Fragment::FieldRange(natural_start, end_field));
+                        } else if caps.name("unbounded").is_some() {
+                            // field placeholder $2, - all fields 2 and after
+                            fragments.push(Fragment::UnboundedFieldRange(start));
+                        } else if start == 0 {
+                            // field placeholder: $0 - all fields
+                            fragments.push(Fragment::UnboundedFieldRange(1));
+                        } else {
+                            // field placeholder: $2 - just field 2
+                            fragments.push(Fragment::SingleField(start));
+                        }
                     }
                     last_field_end = field_end;
                 }
@@ -229,7 +246,7 @@ fn test_merge_single_field() {
     let cursor = io::Cursor::new(input);
 
     let mut out = Vec::new();
-    merge_input(cursor, &mut out, OutputTemplate::parse("single: $2", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
+    merge_input(cursor, &mut out, OutputTemplate::parse("single: {2}", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
     assert_eq!(out, b"single: second\n");
 }
 
@@ -239,7 +256,7 @@ fn test_merge_range() {
     let cursor = io::Cursor::new(input);
 
     let mut out = Vec::new();
-    merge_input(cursor, &mut out, OutputTemplate::parse("range: $1,3", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
+    merge_input(cursor, &mut out, OutputTemplate::parse("range: {1,3}", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
     assert_eq!(out, b"range: first second third\n");
 }
 
@@ -249,7 +266,7 @@ fn test_merge_unbounded() {
     let cursor = io::Cursor::new(input);
 
     let mut out = Vec::new();
-    merge_input(cursor, &mut out, OutputTemplate::parse("range: $4,", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
+    merge_input(cursor, &mut out, OutputTemplate::parse("range: {4,}", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
     assert_eq!(out, b"range: fourth fifth sixth\n");
 }
 
@@ -259,7 +276,7 @@ fn test_merge_all() {
     let cursor = io::Cursor::new(input);
 
     let mut out = Vec::new();
-    merge_input(cursor, &mut out, OutputTemplate::parse("all: $0", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
+    merge_input(cursor, &mut out, OutputTemplate::parse("all: {0}", SPACE_BYTE, NEWLINE_BYTE)).unwrap();
     assert_eq!(out, b"all: first second third fourth\n");
 }
 
@@ -272,7 +289,7 @@ fn test_alternate_field_delimiter() {
     merge_input(
         cursor,
         &mut out,
-        OutputTemplate::parse("single: $2", COMMA_BYTE, NEWLINE_BYTE)).unwrap();
+        OutputTemplate::parse("single: {2}", COMMA_BYTE, NEWLINE_BYTE)).unwrap();
     assert_eq!(out, b"single: second\n");
 }
 
@@ -285,7 +302,7 @@ fn test_alternate_record_delimiter() {
     merge_input(
         cursor,
         &mut out,
-        OutputTemplate::parse("single: $2", COMMA_BYTE, PIPE_BYTE)).unwrap();
+        OutputTemplate::parse("single: {2}", COMMA_BYTE, PIPE_BYTE)).unwrap();
     assert_eq!(out, b"single: second\nsingle: fifth\n");
 }
 
@@ -331,27 +348,39 @@ fn test_extract_fragments() {
         vec![StaticValue(b"foo bar baz")]
     );
     assert_eq!(
-        OutputTemplate::extract_fragments("$1"),
+        OutputTemplate::extract_fragments("{}"),
         vec![SingleField(1)]
     );
     assert_eq!(
-        OutputTemplate::extract_fragments("foo$1bar"),
-        vec![StaticValue(b"foo"), SingleField(1), StaticValue(b"bar")]
+        OutputTemplate::extract_fragments("{}{}"),
+        vec![SingleField(1), SingleField(2)]
     );
     assert_eq!(
-        OutputTemplate::extract_fragments("$2,4"),
+        OutputTemplate::extract_fragments("{}foo{}{1}bar{}{5}"),
+        vec![
+            SingleField(1),
+            StaticValue(b"foo"),
+            SingleField(2),
+            SingleField(1),
+            StaticValue(b"bar"),
+            SingleField(3),
+            SingleField(5)
+        ]
+    );
+    assert_eq!(
+        OutputTemplate::extract_fragments("{2,4}"),
         vec![FieldRange(2, 4)]
     );
     assert_eq!(
-        OutputTemplate::extract_fragments("foo$2,4bar"),
+        OutputTemplate::extract_fragments("foo{2,4}bar"),
         vec![StaticValue(b"foo"), FieldRange(2, 4), StaticValue(b"bar")]
     );
     assert_eq!(
-        OutputTemplate::extract_fragments("$2,"),
+        OutputTemplate::extract_fragments("{2,}"),
         vec![UnboundedFieldRange(2)]
     );
     assert_eq!(
-        OutputTemplate::extract_fragments("$1$2,3$0$5,"),
+        OutputTemplate::extract_fragments("{1}{2,3}{0}{5,}"),
         vec![
             SingleField(1),
             FieldRange(2, 3),
@@ -360,7 +389,7 @@ fn test_extract_fragments() {
         ]
     );
     assert_eq!(
-        OutputTemplate::extract_fragments("foo $1 bar $2,5 baz $6, qux $0 quxx $11,66 quxxx"),
+        OutputTemplate::extract_fragments("foo {1} bar {2,5} baz {6,} qux {0} quxx {11,66} quxxx {}"),
         vec![
             StaticValue(b"foo "),
             SingleField(1),
@@ -372,7 +401,8 @@ fn test_extract_fragments() {
             UnboundedFieldRange(1),
             StaticValue(b" quxx "),
             FieldRange(11, 66),
-            StaticValue(b" quxxx"),
+            StaticValue(b" quxxx "),
+            SingleField(1),
         ]
     );
 }
