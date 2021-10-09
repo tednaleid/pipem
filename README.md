@@ -4,16 +4,16 @@ A basic command line app that lets you pipe it a delimited list of records/field
 
 ex: 
 ```
-seq 3 | pipem 'https://example.com/$1?key=value'
+seq 3 | pipem 'https://example.com/{1}?key=value'
 https://example.com/1?key=value
 https://example.com/2?key=value
 https://example.com/3?key=value
 ```
 
-in addition to singular fields (`$2` emits field 2) it also supports field ranges (`$2,5` will emit fields 2 through 5) :
+in addition to singular fields (`{2}` emits field 2) it also supports field ranges (`{2,5}` will emit fields 2 through 5) :
 
 ```
-cat << EOF | pipem 'first: $1 both: $1,2'
+cat << EOF | pipem 'first: {1} both: {1,2}'
 apple one
 banana two
 carrot three
@@ -23,10 +23,10 @@ first: banana both: banana two
 first: carrot both: carrot three
 ```
 
-and unbounded ranges with a starting field (`$2,` emits field 2 through however many fields there are on the line):
+and unbounded ranges with a starting field (`{2,}` emits field 2 through however many fields there are on the line):
 
 ```
-cat << EOF | pipem 'ragged: $2,'
+cat << EOF | pipem 'ragged: {2,}'
 apple one
 banana two more values here
 carrot three even some more values
